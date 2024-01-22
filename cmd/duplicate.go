@@ -10,10 +10,29 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
+
+func CreateDuplicatePod(ctx context.Context, ioStreams genericclioptions.IOStreams, client *kubernetes.Clientset, deploymentName, namespace, duplicateName string, edit bool) {
+	var err error
+	clonedPod := clonePod(client, deploymentName, namespace, duplicateName)
+	clonedPod.Spec.RestartPolicy = "Never"
+
+	if err != nil {
+		fmt.Printf("Error editing pod: %v\n", err)
+		os.Exit(1)
+	}
+	_, err = client.CoreV1().Pods(namespace).Create(ctx, clonedPod, metav1.CreateOptions{})
+	if err != nil {
+		fmt.Printf("Error creating cloned deployment: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Cloned deployment created successfully.")
+}
 
 func clonePod(client *kubernetes.Clientset, deploymentName, namespace, duplicateName string) *corev1.Pod {
 	var clonedPod corev1.Pod
@@ -33,19 +52,6 @@ func clonePod(client *kubernetes.Clientset, deploymentName, namespace, duplicate
 	clonedPod.Name = duplicateName
 
 	return &clonedPod
-}
-
-func CreateDuplicatePod(ctx context.Context, client *kubernetes.Clientset, deploymentName, namespace, duplicateName string) {
-	clonedPod := clonePod(client, deploymentName, namespace, duplicateName)
-	clonedPod.Spec.RestartPolicy = "Never"
-
-	_, err := client.CoreV1().Pods(namespace).Create(ctx, clonedPod, metav1.CreateOptions{})
-	if err != nil {
-		fmt.Printf("Error creating cloned deployment: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Println("Cloned deployment created successfully.")
 }
 
 func getDefaultNamespace(kubeconfig string) string {
@@ -80,7 +86,7 @@ func getDefaultPodName(input string) string {
 	return result
 }
 
-func IsValidPod(podName string) bool {
+func isValidPod(podName string) bool {
 	// Ref: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#dns-label-names
 	return isValidDNSLabel(podName)
 }
