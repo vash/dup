@@ -28,6 +28,8 @@ import (
 	goruntime "runtime"
 	"strings"
 
+	duputil "dup/pkg/util"
+
 	jsonpatch "github.com/evanphx/json-patch"
 	"github.com/spf13/cobra"
 	"k8s.io/klog/v2"
@@ -66,7 +68,8 @@ type EditOptions struct {
 	cmdutil.ValidateOptions
 	ValidationDirective string
 
-	OriginalResult *resource.Result
+	OriginalResult     *resource.Result
+	OutputResourceName string
 
 	CmdNamespace    string
 	ApplyAnnotation bool
@@ -147,20 +150,21 @@ func (e *editPrinterOptions) PrintObj(obj runtime.Object, out io.Writer) error {
 
 // Complete completes all the required options
 func (o *EditOptions) Complete(f cmdutil.Factory, args []string, cmd *cobra.Command) error {
-	//	podName := args[0]
-	deploymentName := args[1]
-	//if len(args) == 1 && !isValidPod(podName) {
-	// 	return fmt.Errorf("invalid pod name specified: %s", args[0])
-	// }
-	// if len(args) == 0 {
-	// 	podName = getDefaultPodName(deployment)
-	// } else {
-	// 	podName = args[0]
-	// }
 	var err error
-	if err != nil {
-		return err
+	var podName string
+	deploymentName := args[0]
+	switch len(args) {
+	case 1:
+		podName = duputil.GetDefaultPodName(deploymentName)
+	case 2:
+		podName = args[1]
+		if !duputil.IsValidPod(podName) {
+			return fmt.Errorf("invalid pod name specified: %s", args[0])
+		}
+	default:
+		return fmt.Errorf("Incorrect amount of args, expected 1 or 2, got : %+v", args)
 	}
+
 	o.editPrinterOptions.Complete(o.PrintFlags)
 	cmdNamespace, _, err := f.ToRawKubeConfigLoader().Namespace()
 	fmt.Printf("Namespace is %s\n", cmdNamespace)
@@ -179,9 +183,9 @@ func (o *EditOptions) Complete(f cmdutil.Factory, args []string, cmd *cobra.Comm
 	if err != nil {
 		return err
 	}
+	o.OutputResourceName = podName
 	o.OriginalResult = r
 
-	//TODO: Better understand this
 	o.updatedResultGetter = func(data []byte) *resource.Result {
 		// resource builder to read objects from edited data
 		return f.NewBuilder().
@@ -219,7 +223,7 @@ func (o *EditOptions) Run() error {
 	//	CreateDuplicatePod(context.Background(), ioStreams, clientset, deployment, namespace, podName, edit)
 	edit := NewDefaultEditor(editorEnvs())
 	// editFn is invoked for each edit session (once with a list for normal edit, once for each individual resource in a edit-on-create invocation)
-	editFn := func(infos []*resource.Info) error {
+	editFn := func(obj runtime.Object) error {
 		var (
 			results  = editResults{}
 			original = []byte{}
@@ -232,7 +236,7 @@ func (o *EditOptions) Run() error {
 		// loop until we succeed or cancel editing
 		for {
 			// get the object we're going to serialize as input to the editor
-			originalObj := infos[0].Object
+			originalObj := obj
 
 			// generate the file to edit
 			buf := &bytes.Buffer{}
@@ -290,7 +294,7 @@ func (o *EditOptions) Run() error {
 				}
 				containsError = true
 				fmt.Fprintln(o.ErrOut, results.addError(apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("").GroupKind(),
-					"", field.ErrorList{field.Invalid(nil, "The edited file failed validation", fmt.Sprintf("%v", err))}), infos[0]))
+					"", field.ErrorList{field.Invalid(nil, "The edited file failed validation", fmt.Sprintf("%v", err))}), obj[0]))
 				continue
 			}
 
@@ -332,7 +336,7 @@ func (o *EditOptions) Run() error {
 			if err := o.restoreManagedFields(updatedInfos); err != nil {
 				return preservedFile(err, file, o.ErrOut)
 			}
-			if err := o.restoreManagedFields(infos); err != nil {
+			if err := o.restoreManagedFields(obj); err != nil {
 				return preservedFile(err, file, o.ErrOut)
 			}
 
@@ -356,7 +360,14 @@ func (o *EditOptions) Run() error {
 		}
 	}
 	return o.OriginalResult.Visit(func(info *resource.Info, err error) error {
-		return editFn([]*resource.Info{info})
+		/*
+		* First - duplicate the pod
+		* Second - Transform to Info
+		*
+		*
+		 */
+		duplicatedPod := duplicatePod(o, info)
+		return editFn(*resource.Object{duplicatedPod})
 	})
 }
 
