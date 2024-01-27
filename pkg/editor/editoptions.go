@@ -28,6 +28,7 @@ import (
 	goruntime "runtime"
 	"strings"
 
+	"dup/pkg/duplicate"
 	duputil "dup/pkg/util"
 
 	jsonpatch "github.com/evanphx/json-patch"
@@ -152,7 +153,9 @@ func (e *editPrinterOptions) PrintObj(obj runtime.Object, out io.Writer) error {
 func (o *EditOptions) Complete(f cmdutil.Factory, args []string, cmd *cobra.Command) error {
 	var err error
 	var podName string
-	deploymentName := args[0]
+
+	// Expectation = "cmd [deploy] <outputPod>
+	deploymentName := args[0] // TODO: Fix validation checks
 	switch len(args) {
 	case 1:
 		podName = duputil.GetDefaultPodName(deploymentName)
@@ -223,7 +226,7 @@ func (o *EditOptions) Run() error {
 	//	CreateDuplicatePod(context.Background(), ioStreams, clientset, deployment, namespace, podName, edit)
 	edit := NewDefaultEditor(editorEnvs())
 	// editFn is invoked for each edit session (once with a list for normal edit, once for each individual resource in a edit-on-create invocation)
-	editFn := func(obj runtime.Object) error {
+	editFn := func(obj []*resource.Info) error {
 		var (
 			results  = editResults{}
 			original = []byte{}
@@ -236,7 +239,8 @@ func (o *EditOptions) Run() error {
 		// loop until we succeed or cancel editing
 		for {
 			// get the object we're going to serialize as input to the editor
-			originalObj := obj
+			fmt.Println("2")
+			originalObj := obj[0].Object
 
 			// generate the file to edit
 			buf := &bytes.Buffer{}
@@ -287,6 +291,7 @@ func (o *EditOptions) Run() error {
 			if err != nil {
 				return preservedFile(err, file, o.ErrOut)
 			}
+			fmt.Println("1")
 			err = schema.ValidateBytes(cmdutil.StripComments(edited))
 			if err != nil {
 				results = editResults{
@@ -366,8 +371,16 @@ func (o *EditOptions) Run() error {
 		*
 		*
 		 */
-		duplicatedPod := duplicatePod(o, info)
-		return editFn(*resource.Object{duplicatedPod})
+		clientSet, err := o.f.KubernetesClientSet()
+		if err != nil {
+			return err
+		}
+		results, err := o.OriginalResult.Infos()
+		if err != nil {
+			return err
+		}
+		duplicatedPod := duplicate.ClonePods(clientSet, results, o.CmdNamespace, o.OutputResourceName)
+		return editFn(duplicatedPod)
 	})
 }
 
