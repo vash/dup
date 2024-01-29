@@ -19,12 +19,10 @@ package editor
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	goruntime "runtime"
 	"strings"
 
@@ -42,8 +40,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/mergepatch"
-	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
@@ -66,6 +62,7 @@ type EditOptions struct {
 
 	OutputPatch        bool
 	WindowsLineEndings bool
+	SkipEdit           bool
 
 	cmdutil.ValidateOptions
 	ValidationDirective string
@@ -196,7 +193,6 @@ func (o *EditOptions) Complete(f cmdutil.Factory, args []string, cmd *cobra.Comm
 	}
 
 	o.OriginalResult = r
-
 	o.updatedResultGetter = func(data []byte) *resource.Result {
 		// resource builder to read objects from edited data
 		return f.NewBuilder().
@@ -215,8 +211,27 @@ func (o *EditOptions) Complete(f cmdutil.Factory, args []string, cmd *cobra.Comm
 	return nil
 }
 
-// Validate checks the EditOptions to see if there is sufficient information to run the command.
-func (o *EditOptions) Validate() error {
+func (o *EditOptions) createResources(obj []*resource.Info) error {
+	visitor := resource.InfoListVisitor(obj)
+
+	if err := o.restoreManagedFields(obj); err != nil {
+		return err
+	}
+
+	// need to make sure the original namespace wasn't changed while editing
+	if err := visitor.Visit(resource.RequireNamespace(o.CmdNamespace)); err != nil {
+		return err
+	}
+
+	// iterate through all items to apply annotations
+	if err := o.visitAnnotation(visitor); err != nil {
+		return err
+	}
+
+	err := o.visitToCreate(visitor)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -298,13 +313,6 @@ func (o *EditOptions) Run() error {
 				continue
 			}
 
-			// Compare content without comments
-			// if bytes.Equal(cmdutil.StripComments(original), cmdutil.StripComments(edited)) {
-			// 	os.Remove(file)
-			// 	fmt.Fprintln(o.ErrOut, "Edit cancelled, no changes made.")
-			// 	return nil
-			// }
-
 			lines, err := hasLines(bytes.NewBuffer(edited))
 			if err != nil {
 				return preservedFile(err, file, o.ErrOut)
@@ -328,29 +336,14 @@ func (o *EditOptions) Run() error {
 				continue
 			}
 
-			// not a syntax error as it turns out...
 			containsError = false
-			updatedVisitor := resource.InfoListVisitor(updatedInfos)
 
-			// we need to add back managedFields to both updated and original object
-			if err := o.restoreManagedFields(updatedInfos); err != nil {
-				return preservedFile(err, file, o.ErrOut)
-			}
+			// restore managed fields to original object
 			if err := o.restoreManagedFields(obj); err != nil {
 				return preservedFile(err, file, o.ErrOut)
 			}
 
-			// need to make sure the original namespace wasn't changed while editing
-			if err := updatedVisitor.Visit(resource.RequireNamespace(o.CmdNamespace)); err != nil {
-				return preservedFile(err, file, o.ErrOut)
-			}
-
-			// iterate through all items to apply annotations
-			if err := o.visitAnnotation(updatedVisitor); err != nil {
-				return preservedFile(err, file, o.ErrOut)
-			}
-
-			err = o.visitToCreate(updatedVisitor)
+			err = o.createResources(updatedInfos)
 			if err != nil {
 				return preservedFile(err, results.file, o.ErrOut)
 			}
@@ -370,8 +363,40 @@ func (o *EditOptions) Run() error {
 		}
 	}
 	return o.OriginalResult.Visit(func(info *resource.Info, err error) error {
-		return editFn([]*resource.Info{info})
+		objects := []*resource.Info{info}
+
+		if o.SkipEdit {
+			err := o.createResources(objects)
+			if err != nil {
+				return err
+			}
+			return nil
+		}
+		return editFn(objects)
 	})
+}
+
+func (o *EditOptions) Build(reader io.Reader, validate string) (*resource.Result, error) {
+	schema, err := o.f.Validator(validate)
+	if err != nil {
+		return nil, err
+	}
+
+	result := o.f.NewBuilder().
+		Unstructured().
+		Schema(schema).
+		Stream(reader, "").
+		Do()
+
+	err = result.Err()
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func objBody(obj runtime.Object) io.ReadCloser {
+	return io.NopCloser(bytes.NewReader([]byte(runtime.EncodeOrDie(codec, obj))))
 }
 
 func (o *EditOptions) extractManagedFields(obj runtime.Object) error {
@@ -415,59 +440,6 @@ func (o *EditOptions) restoreManagedFields(infos []*resource.Info) error {
 		metaObjs.SetManagedFields(mf)
 	}
 	return nil
-}
-
-func (o *EditOptions) visitToApplyEditPatch(originalInfos []*resource.Info, patchVisitor resource.Visitor) error {
-	err := patchVisitor.Visit(func(info *resource.Info, incomingErr error) error {
-		editObjUID, err := meta.NewAccessor().UID(info.Object)
-		if err != nil {
-			return err
-		}
-
-		var originalInfo *resource.Info
-		for _, i := range originalInfos {
-			originalObjUID, err := meta.NewAccessor().UID(i.Object)
-			if err != nil {
-				return err
-			}
-			if editObjUID == originalObjUID {
-				originalInfo = i
-				break
-			}
-		}
-		if originalInfo == nil {
-			return fmt.Errorf("no original object found for %#v", info.Object)
-		}
-
-		originalJS, err := encodeToJSON(originalInfo.Object.(runtime.Unstructured))
-		if err != nil {
-			return err
-		}
-
-		editedJS, err := encodeToJSON(info.Object.(runtime.Unstructured))
-		if err != nil {
-			return err
-		}
-
-		if reflect.DeepEqual(originalJS, editedJS) {
-			printer, err := o.ToPrinter("skipped")
-			if err != nil {
-				return err
-			}
-			return printer.PrintObj(info.Object, o.Out)
-		}
-		err = o.annotationPatch(info)
-		if err != nil {
-			return err
-		}
-
-		printer, err := o.ToPrinter("edited")
-		if err != nil {
-			return err
-		}
-		return printer.PrintObj(info.Object, o.Out)
-	})
-	return err
 }
 
 func (o *EditOptions) annotationPatch(update *resource.Info) error {
@@ -523,117 +495,6 @@ func encodeToJSON(obj runtime.Unstructured) ([]byte, error) {
 		return nil, err
 	}
 	return js, nil
-}
-
-func (o *EditOptions) visitToPatch(originalInfos []*resource.Info, patchVisitor resource.Visitor, results *editResults) error {
-	err := patchVisitor.Visit(func(info *resource.Info, incomingErr error) error {
-		editObjUID, err := meta.NewAccessor().UID(info.Object)
-		if err != nil {
-			return err
-		}
-
-		var originalInfo *resource.Info
-		for _, i := range originalInfos {
-			originalObjUID, err := meta.NewAccessor().UID(i.Object)
-			if err != nil {
-				return err
-			}
-			if editObjUID == originalObjUID {
-				originalInfo = i
-				break
-			}
-		}
-		if originalInfo == nil {
-			return fmt.Errorf("no original object found for %#v", info.Object)
-		}
-
-		originalJS, err := encodeToJSON(originalInfo.Object.(runtime.Unstructured))
-		if err != nil {
-			return err
-		}
-
-		editedJS, err := encodeToJSON(info.Object.(runtime.Unstructured))
-		if err != nil {
-			return err
-		}
-
-		if reflect.DeepEqual(originalJS, editedJS) {
-			// no edit, so just skip it.
-			printer, err := o.ToPrinter("skipped")
-			if err != nil {
-				return err
-			}
-			return printer.PrintObj(info.Object, o.Out)
-		}
-
-		preconditions := []mergepatch.PreconditionFunc{
-			mergepatch.RequireKeyUnchanged("apiVersion"),
-			mergepatch.RequireKeyUnchanged("kind"),
-			mergepatch.RequireMetadataKeyUnchanged("name"),
-			mergepatch.RequireKeyUnchanged("managedFields"),
-		}
-
-		// Create the versioned struct from the type defined in the mapping
-		// (which is the API version we'll be submitting the patch to)
-		versionedObject, err := scheme.Scheme.New(info.Mapping.GroupVersionKind)
-		var patchType types.PatchType
-		var patch []byte
-		switch {
-		case runtime.IsNotRegisteredError(err):
-			// fall back to generic JSON merge patch
-			patchType = types.MergePatchType
-			patch, err = jsonpatch.CreateMergePatch(originalJS, editedJS)
-			if err != nil {
-				klog.V(4).Infof("Unable to calculate diff, no merge is possible: %v", err)
-				return err
-			}
-			var patchMap map[string]interface{}
-			err = json.Unmarshal(patch, &patchMap)
-			if err != nil {
-				klog.V(4).Infof("Unable to calculate diff, no merge is possible: %v", err)
-				return err
-			}
-			for _, precondition := range preconditions {
-				if !precondition(patchMap) {
-					klog.V(4).Infof("Unable to calculate diff, no merge is possible: %v", err)
-					return fmt.Errorf("%s", "At least one of apiVersion, kind and name was changed")
-				}
-			}
-		case err != nil:
-			return err
-		default:
-			patchType = types.StrategicMergePatchType
-			patch, err = strategicpatch.CreateTwoWayMergePatch(originalJS, editedJS, versionedObject, preconditions...)
-			if err != nil {
-				klog.V(4).Infof("Unable to calculate diff, no merge is possible: %v", err)
-				if mergepatch.IsPreconditionFailed(err) {
-					return fmt.Errorf("%s", "At least one of apiVersion, kind and name was changed")
-				}
-				return err
-			}
-		}
-
-		if o.OutputPatch {
-			fmt.Fprintf(o.Out, "Patch: %s\n", string(patch))
-		}
-
-		patched, err := resource.NewHelper(info.Client, info.Mapping).
-			WithFieldManager(o.FieldManager).
-			WithFieldValidation(o.ValidationDirective).
-			WithSubresource(o.Subresource).
-			Patch(info.Namespace, info.Name, patchType, patch, nil)
-		if err != nil {
-			fmt.Fprintln(o.ErrOut, results.addError(err, info))
-			return nil
-		}
-		info.Refresh(patched, true)
-		printer, err := o.ToPrinter("edited")
-		if err != nil {
-			return err
-		}
-		return printer.PrintObj(info.Object, o.Out)
-	})
-	return err
 }
 
 func (o *EditOptions) visitToCreate(createVisitor resource.Visitor) error {
@@ -793,28 +654,4 @@ func editorEnvs() []string {
 		"KUBE_EDITOR",
 		"EDITOR",
 	}
-}
-func objBody(obj runtime.Object) io.ReadCloser {
-	return io.NopCloser(bytes.NewReader([]byte(runtime.EncodeOrDie(codec, obj))))
-}
-
-// TODO: Placement
-func (o *EditOptions) Build(reader io.Reader, validate string) (*resource.Result, error) {
-	// Redundant
-	schema, err := o.f.Validator(validate)
-	if err != nil {
-		return nil, err
-	}
-
-	result := o.f.NewBuilder().
-		Unstructured().
-		Schema(schema).
-		Stream(reader, "").
-		Do()
-
-	err = result.Err()
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
 }
