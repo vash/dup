@@ -167,11 +167,14 @@ func (o *EditOptions) Complete(f cmdutil.Factory, args []string, cmd *cobra.Comm
 		return fmt.Errorf("Incorrect amount of args, expected 1 or 2, got : %+v", args)
 	}
 
+	o.f = f
 	o.editPrinterOptions.Complete(o.PrintFlags)
 	cmdNamespace, _, err := f.ToRawKubeConfigLoader().Namespace()
 	if err != nil {
 		return err
 	}
+	o.CmdNamespace = cmdNamespace
+
 	o.ValidationDirective, err = cmdutil.GetValidationDirective(cmd)
 	if err != nil {
 		return err
@@ -208,8 +211,6 @@ func (o *EditOptions) Complete(f cmdutil.Factory, args []string, cmd *cobra.Comm
 		o.PrintFlags.NamePrintFlags.Operation = operation
 		return o.PrintFlags.ToPrinter()
 	}
-	o.CmdNamespace = cmdNamespace
-	o.f = f
 
 	return nil
 }
@@ -226,11 +227,10 @@ func (o *EditOptions) Run() error {
 	// editFn is invoked for each edit session (once with a list for normal edit, once for each individual resource in a edit-on-create invocation)
 	editFn := func(obj []*resource.Info) error {
 		var (
-			results  = editResults{}
-			original = []byte{}
-			edited   = []byte{}
-			file     string
-			err      error
+			results = editResults{}
+			edited  = []byte{}
+			file    string
+			err     error
 		)
 
 		containsError := false
@@ -254,11 +254,9 @@ func (o *EditOptions) Run() error {
 				if err := o.extractManagedFields(originalObj); err != nil {
 					return preservedFile(err, results.file, o.ErrOut)
 				}
-
 				if err := o.editPrinterOptions.PrintObj(originalObj, w); err != nil {
 					return preservedFile(err, results.file, o.ErrOut)
 				}
-				original = buf.Bytes()
 			} else {
 				// In case of an error, preserve the edited file.
 				// Remove the comments (header) from it since we already
@@ -288,7 +286,7 @@ func (o *EditOptions) Run() error {
 			if err != nil {
 				return preservedFile(err, file, o.ErrOut)
 			}
-			fmt.Println("1")
+
 			err = schema.ValidateBytes(cmdutil.StripComments(edited))
 			if err != nil {
 				results = editResults{
@@ -301,11 +299,11 @@ func (o *EditOptions) Run() error {
 			}
 
 			// Compare content without comments
-			if bytes.Equal(cmdutil.StripComments(original), cmdutil.StripComments(edited)) {
-				os.Remove(file)
-				fmt.Fprintln(o.ErrOut, "Edit cancelled, no changes made.")
-				return nil
-			}
+			// if bytes.Equal(cmdutil.StripComments(original), cmdutil.StripComments(edited)) {
+			// 	os.Remove(file)
+			// 	fmt.Fprintln(o.ErrOut, "Edit cancelled, no changes made.")
+			// 	return nil
+			// }
 
 			lines, err := hasLines(bytes.NewBuffer(edited))
 			if err != nil {
@@ -356,6 +354,16 @@ func (o *EditOptions) Run() error {
 			if err != nil {
 				return preservedFile(err, results.file, o.ErrOut)
 			}
+
+			if len(results.edit) == 0 {
+				if results.notfound == 0 {
+					os.Remove(file)
+				} else {
+					fmt.Fprintf(o.Out, "The edits you made on deleted resources have been saved to %q\n", file)
+				}
+				return nil
+			}
+
 			if len(results.header.reasons) > 0 {
 				containsError = true
 			}
