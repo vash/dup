@@ -57,6 +57,7 @@ import (
 )
 
 var SupportedSubresources = []string{"status"}
+var codec = scheme.Codecs.LegacyCodec(scheme.Scheme.PrioritizedVersionsAllGroups()...)
 
 // EditOptions contains all the options for running edit cli command.
 type EditOptions struct {
@@ -69,8 +70,7 @@ type EditOptions struct {
 	cmdutil.ValidateOptions
 	ValidationDirective string
 
-	OriginalResult     *resource.Result
-	OutputResourceName string
+	OriginalResult *resource.Result
 
 	CmdNamespace    string
 	ApplyAnnotation bool
@@ -145,7 +145,6 @@ func (e *editPrinterOptions) PrintObj(obj runtime.Object, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-
 	return p.PrintObj(obj, out)
 }
 
@@ -170,23 +169,29 @@ func (o *EditOptions) Complete(f cmdutil.Factory, args []string, cmd *cobra.Comm
 
 	o.editPrinterOptions.Complete(o.PrintFlags)
 	cmdNamespace, _, err := f.ToRawKubeConfigLoader().Namespace()
-	fmt.Printf("Namespace is %s\n", cmdNamespace)
-
 	if err != nil {
 		return err
 	}
-	r := f.NewBuilder().
-		Unstructured().
-		NamespaceParam(cmdNamespace).
-		DefaultNamespace().
-		ResourceNames("deployments", deploymentName).
-		Do()
-
-	err = r.Err()
+	o.ValidationDirective, err = cmdutil.GetValidationDirective(cmd)
 	if err != nil {
 		return err
 	}
-	o.OutputResourceName = podName
+
+	clientSet, err := o.f.KubernetesClientSet()
+	if err != nil {
+		return err
+	}
+
+	clonedPod, err := duplicate.ClonePod(clientSet, o.CmdNamespace, deploymentName, podName)
+	if err != nil {
+		return err
+	}
+
+	r, err := o.Build(objBody(clonedPod), o.ValidationDirective)
+	if err != nil {
+		return err
+	}
+
 	o.OriginalResult = r
 
 	o.updatedResultGetter = func(data []byte) *resource.Result {
@@ -194,7 +199,6 @@ func (o *EditOptions) Complete(f cmdutil.Factory, args []string, cmd *cobra.Comm
 		return f.NewBuilder().
 			Unstructured().
 			Stream(bytes.NewReader(data), "edited-file").
-			Subresource(o.Subresource).
 			ContinueOnError().
 			Flatten().
 			Do()
@@ -204,12 +208,6 @@ func (o *EditOptions) Complete(f cmdutil.Factory, args []string, cmd *cobra.Comm
 		o.PrintFlags.NamePrintFlags.Operation = operation
 		return o.PrintFlags.ToPrinter()
 	}
-
-	o.ValidationDirective, err = cmdutil.GetValidationDirective(cmd)
-	if err != nil {
-		return err
-	}
-
 	o.CmdNamespace = cmdNamespace
 	o.f = f
 
@@ -239,7 +237,6 @@ func (o *EditOptions) Run() error {
 		// loop until we succeed or cancel editing
 		for {
 			// get the object we're going to serialize as input to the editor
-			fmt.Println("2")
 			originalObj := obj[0].Object
 
 			// generate the file to edit
@@ -365,22 +362,7 @@ func (o *EditOptions) Run() error {
 		}
 	}
 	return o.OriginalResult.Visit(func(info *resource.Info, err error) error {
-		/*
-		* First - duplicate the pod
-		* Second - Transform to Info
-		*
-		*
-		 */
-		clientSet, err := o.f.KubernetesClientSet()
-		if err != nil {
-			return err
-		}
-		results, err := o.OriginalResult.Infos()
-		if err != nil {
-			return err
-		}
-		duplicatedPod := duplicate.ClonePods(clientSet, results, o.CmdNamespace, o.OutputResourceName)
-		return editFn(duplicatedPod)
+		return editFn([]*resource.Info{info})
 	})
 }
 
@@ -803,4 +785,28 @@ func editorEnvs() []string {
 		"KUBE_EDITOR",
 		"EDITOR",
 	}
+}
+func objBody(obj runtime.Object) io.ReadCloser {
+	return io.NopCloser(bytes.NewReader([]byte(runtime.EncodeOrDie(codec, obj))))
+}
+
+// TODO: Placement
+func (o *EditOptions) Build(reader io.Reader, validate string) (*resource.Result, error) {
+	// Redundant
+	schema, err := o.f.Validator(validate)
+	if err != nil {
+		return nil, err
+	}
+
+	result := o.f.NewBuilder().
+		Unstructured().
+		Schema(schema).
+		Stream(reader, "").
+		Do()
+
+	err = result.Err()
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
