@@ -22,18 +22,14 @@ var (
 )
 
 func validateArgs(cmd *cobra.Command, args []string) error {
-	// Validate the number of arguments
 	if len(args) < 1 || len(args) > 2 {
 		return fmt.Errorf("requires exactly 1 or 2 arguments")
 	}
-
-	// Validate each argument using ValidName function
 	for _, arg := range args {
 		if !util.IsValidPod(arg) {
 			return fmt.Errorf("invalid argument: %s", arg)
 		}
 	}
-
 	return nil
 }
 func NewRootCmd(ioStreams genericclioptions.IOStreams) *cobra.Command {
@@ -43,12 +39,22 @@ func NewRootCmd(ioStreams genericclioptions.IOStreams) *cobra.Command {
 	f := cmdutil.NewFactory(matchVersionKubeConfigFlags)
 
 	var rootCmd = &cobra.Command{
-		Use:               "dup",
+		Use:               "kubectl dup <Deployment> [OutputPod]",
 		Short:             "Duplicate a pod out of a Deployment",
 		ValidArgsFunction: completion.ResourceTypeAndNameCompletionFunc(f),
+		Args:              cobra.RangeArgs(1, 2),
 		Run: func(cmd *cobra.Command, args []string) {
 			cmdutil.CheckErr(o.Complete(f, args, cmd))
 			cmdutil.CheckErr(o.Run())
+		},
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			// Validate each argument using IsValid function
+			for _, arg := range args {
+				if !util.IsValidPod(arg) {
+					return fmt.Errorf("invalid argument: %s", arg)
+				}
+			}
+			return nil
 		},
 	}
 	o.PrintFlags.AddFlags(rootCmd)
