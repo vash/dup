@@ -22,6 +22,15 @@ func ClonePod(client *kubernetes.Clientset, namespace, deployment, podName strin
 	}
 	clonedPod.ObjectMeta.Labels = labelMap
 	clonedPod.Name = podName
-	clonedPod.Spec.RestartPolicy = "Never"
+	disableProbes(&clonedPod)
+
 	return &clonedPod, nil
+}
+
+func disableProbes(pod *corev1.Pod) {
+	containers := pod.Spec.Containers
+	for i := range containers {
+		containers[i].ReadinessProbe = nil
+		containers[i].LivenessProbe = nil
+	}
 }
