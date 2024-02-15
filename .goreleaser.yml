@@ -3,7 +3,7 @@ before:
     - go mod download
 builds:
   - id: kubectl-dup
-    main: ./cmd/kubectl-dup
+    main: .
     binary: kubectl-dup
     env:
       - CGO_ENABLED=0
