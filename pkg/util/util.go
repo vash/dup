@@ -29,7 +29,7 @@ func GetDefaultKubeconfigPath() string {
 	return kubeconfigDefaultPath
 }
 
-func GetDefaultPodName(input string) string {
+func GenerateResourceName(input string) string {
 	var result string
 	var suffix = "-dup-" + uuid.New().String()[:4]
 	var maxPodNameLength = 63 - len(suffix) //RFC1035

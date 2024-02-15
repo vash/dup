@@ -27,7 +27,6 @@ import (
 	"strings"
 
 	"dup/pkg/duplicate"
-	duputil "dup/pkg/util"
 
 	jsonpatch "github.com/evanphx/json-patch"
 	"github.com/spf13/cobra"
@@ -64,6 +63,7 @@ type EditOptions struct {
 	OutputPatch        bool
 	WindowsLineEndings bool
 	SkipEdit           bool
+	DuplicateOptions   *duplicate.DupPodOptions
 
 	cmdutil.ValidateOptions
 	ValidationDirective string
@@ -87,6 +87,12 @@ type EditOptions struct {
 	Subresource string
 }
 
+type DuplicateOptions struct {
+	DuplicatePod bool
+	RemoveProbes bool
+	Image        string
+}
+
 // NewEditOptions returns an initialized EditOptions instance
 func NewEditOptions(ioStreams genericiooptions.IOStreams) *EditOptions {
 	return &EditOptions{
@@ -104,7 +110,8 @@ func NewEditOptions(ioStreams genericiooptions.IOStreams) *EditOptions {
 
 		WindowsLineEndings: goruntime.GOOS == "windows",
 
-		IOStreams: ioStreams,
+		IOStreams:        ioStreams,
+		DuplicateOptions: &duplicate.DupPodOptions{},
 	}
 }
 
@@ -149,51 +156,50 @@ func (e *editPrinterOptions) PrintObj(obj runtime.Object, out io.Writer) error {
 // Complete completes all the required options
 func (o *EditOptions) Complete(f cmdutil.Factory, args []string, cmd *cobra.Command) error {
 	var err error
-	var podName string
-
-	// Expectation = "cmd [deploy] <outputPod>
-	deploymentName := args[0] // TODO: Fix validation checks
-	switch len(args) {
-	case 1:
-		podName = duputil.GetDefaultPodName(deploymentName)
-	case 2:
-		podName = args[1]
-		if !duputil.IsValidPod(podName) {
-			return fmt.Errorf("invalid pod name specified: %s", args[0])
-		}
-	default:
-		return fmt.Errorf("Incorrect amount of args, expected 1 or 2, got : %+v", args)
-	}
 
 	o.f = f
 	o.editPrinterOptions.Complete(o.PrintFlags)
-	cmdNamespace, _, err := f.ToRawKubeConfigLoader().Namespace()
+
+	o.CmdNamespace, _, err = f.ToRawKubeConfigLoader().Namespace()
 	if err != nil {
 		return err
 	}
-	o.CmdNamespace = cmdNamespace
 
 	o.ValidationDirective, err = cmdutil.GetValidationDirective(cmd)
 	if err != nil {
 		return err
 	}
 
-	clientSet, err := o.f.KubernetesClientSet()
+	b := f.NewBuilder().
+		Unstructured().
+		ResourceTypeOrNameArgs(true, args...).
+		NamespaceParam(o.CmdNamespace).DefaultNamespace().
+		ContinueOnError().
+		Flatten().
+		Do()
+
+	err = b.Err()
 	if err != nil {
 		return err
 	}
 
-	clonedPod, err := duplicate.ClonePod(clientSet, o.CmdNamespace, deploymentName, podName)
+	objects, err := b.Infos()
 	if err != nil {
 		return err
 	}
 
-	r, err := o.Build(objBody(clonedPod), o.ValidationDirective)
+	resources, err := duplicate.Clone(o.DuplicateOptions, objects)
 	if err != nil {
 		return err
 	}
 
-	o.OriginalResult = r
+	result, err := o.Build(objsBody(resources), o.ValidationDirective)
+	if err != nil {
+		return err
+	}
+
+	o.OriginalResult = result
+
 	o.updatedResultGetter = func(data []byte) *resource.Result {
 		// resource builder to read objects from edited data
 		return f.NewBuilder().
@@ -398,6 +404,15 @@ func (o *EditOptions) Build(reader io.Reader, validate string) (*resource.Result
 
 func objBody(obj runtime.Object) io.ReadCloser {
 	return io.NopCloser(bytes.NewReader([]byte(runtime.EncodeOrDie(codec, obj))))
+}
+
+func objsBody(objs []*runtime.Object) io.Reader {
+	var readers []io.Reader
+	for _, obj := range objs {
+		reader := bytes.NewReader([]byte(runtime.EncodeOrDie(codec, *obj)))
+		readers = append(readers, reader)
+	}
+	return io.MultiReader(readers...)
 }
 
 func (o *EditOptions) extractManagedFields(obj runtime.Object) error {

@@ -1,0 +1,39 @@
+apiVersion: krew.googlecontainertools.github.com/v1alpha2
+kind: Plugin
+metadata:
+  name: dup
+spec:
+  version: {{ .TagName }}
+  homepage: https://github.com/vash/dup
+  shortDescription: Easily and powerfully duplicate (and edit) existing Kubernetes resources and pods that are spawned by them.
+  description: |
+    This plugin is designed for on-the-fly duplication of Kubernetes resources.
+    It focuses on providing a convenient way to edit resources before duplication,
+    with a specific emphasis on Pods to create a fine-tuned resource quickly.
+    This tool can be used for debugging running containers without them crashing,
+    and simplifying the administration and general interaction with Kubernetes clusters.
+  platforms:
+  - selector:
+      matchLabels:
+        os: darwin
+        arch: amd64
+    {{addURIAndSha "https://github.com/vash/dup/releases/download/{{ .TagName }}/kubectl-dup_{{ .TagName }}_darwin_amd64.tar.gz" .TagName }}
+    bin: kubectl-dup
+  - selector:
+      matchLabels:
+        os: darwin
+        arch: arm64
+    {{addURIAndSha "https://github.com/vash/kubectl-dup/releases/download/{{ .TagName }}/kubectl-tree_{{ .TagName }}_darwin_arm64.tar.gz" .TagName }}
+    bin: kubectl-dup
+  - selector:
+      matchLabels:
+        os: linux
+        arch: amd64
+    {{addURIAndSha "https://github.com/vash/kubectl-dup/releases/download/{{ .TagName }}/kubectl-tree_{{ .TagName }}_linux_amd64.tar.gz" .TagName }}
+    bin: kubectl-dup
+  - selector:
+      matchLabels:
+        os: windows
+        arch: amd64
+    {{addURIAndSha "https://github.com/vash/kubectl-dup/releases/download/{{ .TagName }}/kubectl-tree_{{ .TagName }}_windows_amd64.tar.gz" .TagName }}
+    bin: kubectl-dup.exe

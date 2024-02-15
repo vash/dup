@@ -39,29 +39,26 @@ func NewRootCmd(ioStreams genericclioptions.IOStreams) *cobra.Command {
 	f := cmdutil.NewFactory(matchVersionKubeConfigFlags)
 
 	var rootCmd = &cobra.Command{
-		Use:               "kubectl dup <Deployment> [OutputPod]",
+		Use:               "kubectl dup [options] <resource-type, ...resource-type-n> <resource> [output-resource-prefix]",
 		Short:             "Duplicate a pod out of a Deployment",
 		ValidArgsFunction: completion.ResourceTypeAndNameCompletionFunc(f),
-		Args:              cobra.RangeArgs(1, 2),
+		Args:              cobra.RangeArgs(2, 3),
 		Run: func(cmd *cobra.Command, args []string) {
 			cmdutil.CheckErr(o.Complete(f, args, cmd))
 			cmdutil.CheckErr(o.Run())
 		},
-		PreRunE: func(cmd *cobra.Command, args []string) error {
-			// Validate each argument using IsValid function
-			for _, arg := range args {
-				if !util.IsValidPod(arg) {
-					return fmt.Errorf("invalid argument: %s", arg)
-				}
-			}
-			return nil
-		},
 	}
-	o.PrintFlags.AddFlags(rootCmd)
-	cmdutil.AddValidateFlags(rootCmd)
+
+	rootCmd.Flags().BoolVarP(&o.DuplicateOptions.DuplicatePod, "pod", "p", false, "Duplicate pod of resource, currently only applies for: 'StatefulSet','Deployment','CronJob','Job'")
+	rootCmd.Flags().BoolVarP(&o.DuplicateOptions.DisableProbes, "disable-probes", "d", true, "Disable Readiness and liveness probes for duplicated pods only (requires '-p' for complex resources)")
+	rootCmd.Flags().BoolVarP(&o.SkipEdit, "skip-edit", "k", false, "Skip editing duplicated resource before creation")
 	rootCmd.Flags().BoolVar(&o.WindowsLineEndings, "windows-line-endings", o.WindowsLineEndings,
 		"Defaults to the line ending native to your platform.")
-	rootCmd.Flags().BoolVarP(&o.SkipEdit, "skip edit", "s", false, "Skip editing duplicated resource before creation")
+
+	kubeConfigFlags.AddFlags(rootCmd.Flags())
+	matchVersionKubeConfigFlags.AddFlags(rootCmd.Flags())
+	cmdutil.AddValidateFlags(rootCmd)
+	o.PrintFlags.AddFlags(rootCmd)
 	return rootCmd
 }
 
