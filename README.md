@@ -45,10 +45,10 @@ kubectl dup pod my-pod -d
 
 ## Options
 
--d, --disable-probes Automatically disable readiness and liveness probes for duplicated pods.
--h, --help: Display help information.
--p, --pod: Duplicate pod of complex objects, supported objects: 'StatefulSet','Deployment','CronJob','Job'.
--k, --skip-edit: Skip editing duplicated resource before creation
+- -d, --disable-probes Automatically disable readiness and liveness probes for duplicated pods.
+- -h, --help: Display help information.
+- -p, --pod: Duplicate pod of complex objects, supported objects: 'StatefulSet','Deployment','CronJob','Job'.
+- -k, --skip-edit: Skip editing duplicated resource before creation
 
 ## Contributing
 
