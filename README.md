@@ -1,4 +1,6 @@
-# Dup - Kubectl Plugin for effective duplication of Kubernetes Resources
+![Dup](imgs/dup.svg)
+
+# dup - kubectl Plugin for duplication of Kubernetes Resources
 
 This plugin is designed for on-the-fly duplication of Kubernetes resources.
 It focuses on providing a convenient way to edit resources before duplication,
