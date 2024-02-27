@@ -8,6 +8,8 @@ with a specific emphasis on Pods to create a fine-tuned resource quickly.
 This tool can be used for debugging running containers without them crashing,
 and simplifying the administration and general interaction with Kubernetes clusters.
 
+[![asciicast](https://asciinema.org/a/C8Lr4dCXGOCA6Pc0GB7xXWSyG.svg)](https://asciinema.org/a/C8Lr4dCXGOCA6Pc0GB7xXWSyG)
+
 ## Installation
 
 ### Using Krew (Kubectl Plugin Manager)
