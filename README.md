@@ -10,7 +10,7 @@ and simplifying the administration and general interaction with Kubernetes clust
 
 ## Installation
 
-### Using Krew (Kubectl Plugin Manager) # SOON
+### Using Krew (Kubectl Plugin Manager)
 
 ```bash
 kubectl krew install dup
