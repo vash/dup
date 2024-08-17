@@ -1,11 +1,11 @@
+version: 2
+
 before:
   hooks:
-    - go mod download
+    - go mod tidy
+
 builds:
-  - id: kubectl-dup
-    main: .
-    binary: kubectl-dup
-    env:
+  - env:
       - CGO_ENABLED=0
     goos:
       - linux
@@ -17,12 +17,24 @@ builds:
     ignore:
       - goos: windows
         goarch: arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    binary: kubectl-dup
+    ldflags:
+      - -s -w
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Tag }}_checksums.txt"
 
 archives:
-  - builds:
-      - kubectl-dup
+  - format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Tag }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
-    wrap_in_directory: false
-    format: tar.gz
-    files:
-      - LICENSE
+    # use zip for windows archives
+    format_overrides:
+      - goos: windows
+        format: zip
+
+changelog:
+  use: github
+
+snapshot:
+  version_template: "{{ incminor .Tag }}-dev-{{ .ShortCommit }}"

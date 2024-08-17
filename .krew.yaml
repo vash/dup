@@ -17,23 +17,23 @@ spec:
       matchLabels:
         os: darwin
         arch: amd64
-    {{addURIAndSha "https://github.com/vash/dup/releases/download/{{ .TagName }}/kubectl-dup_{{ .TagName }}_darwin_amd64.tar.gz" .TagName }}
+    {{addURIAndSha "https://github.com/vash/dup/releases/download/{{ .TagName }}/dup_{{ .TagName }}_darwin_amd64.tar.gz" .TagName }}
     bin: kubectl-dup
   - selector:
       matchLabels:
         os: darwin
         arch: arm64
-    {{addURIAndSha "https://github.com/vash/kubectl-dup/releases/download/{{ .TagName }}/kubectl-tree_{{ .TagName }}_darwin_arm64.tar.gz" .TagName }}
+    {{addURIAndSha "https://github.com/vash/dup/releases/download/{{ .TagName }}/dup_{{ .TagName }}_darwin_arm64.tar.gz" .TagName }}
     bin: kubectl-dup
   - selector:
       matchLabels:
         os: linux
         arch: amd64
-    {{addURIAndSha "https://github.com/vash/kubectl-dup/releases/download/{{ .TagName }}/kubectl-tree_{{ .TagName }}_linux_amd64.tar.gz" .TagName }}
+    {{addURIAndSha "https://github.com/vash/dup/releases/download/{{ .TagName }}/dup_{{ .TagName }}_linux_amd64.tar.gz" .TagName }}
     bin: kubectl-dup
   - selector:
       matchLabels:
         os: windows
         arch: amd64
-    {{addURIAndSha "https://github.com/vash/kubectl-dup/releases/download/{{ .TagName }}/kubectl-tree_{{ .TagName }}_windows_amd64.tar.gz" .TagName }}
+    {{addURIAndSha "https://github.com/vash/dup/releases/download/{{ .TagName }}/dup_{{ .TagName }}_windows_amd64.zip" .TagName }}
     bin: kubectl-dup.exe

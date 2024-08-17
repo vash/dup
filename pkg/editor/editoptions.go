@@ -53,7 +53,7 @@ import (
 )
 
 var SupportedSubresources = []string{"status"}
-var codec = scheme.Codecs.LegacyCodec(scheme.Scheme.PrioritizedVersionsAllGroups()...)
+var encoder = scheme.DefaultJSONEncoder()
 
 // EditOptions contains all the options for running edit cli command.
 type EditOptions struct {
@@ -63,7 +63,7 @@ type EditOptions struct {
 	OutputPatch        bool
 	WindowsLineEndings bool
 	SkipEdit           bool
-	DuplicateOptions   *duplicate.DupPodOptions
+	DuplicateOptions   *duplicate.PodOptions
 
 	cmdutil.ValidateOptions
 	ValidationDirective string
@@ -111,7 +111,7 @@ func NewEditOptions(ioStreams genericiooptions.IOStreams) *EditOptions {
 		WindowsLineEndings: goruntime.GOOS == "windows",
 
 		IOStreams:        ioStreams,
-		DuplicateOptions: &duplicate.DupPodOptions{},
+		DuplicateOptions: &duplicate.PodOptions{},
 	}
 }
 
@@ -193,7 +193,11 @@ func (o *EditOptions) Complete(f cmdutil.Factory, args []string, cmd *cobra.Comm
 		return err
 	}
 
-	result, err := o.Build(objsBody(resources), o.ValidationDirective)
+	resourceObjects, err := objsBody(resources)
+	if err != nil {
+		return err
+	}
+	result, err := o.Build(resourceObjects, o.ValidationDirective)
 	if err != nil {
 		return err
 	}
@@ -402,17 +406,25 @@ func (o *EditOptions) Build(reader io.Reader, validate string) (*resource.Result
 	return result, nil
 }
 
-func objBody(obj runtime.Object) io.ReadCloser {
-	return io.NopCloser(bytes.NewReader([]byte(runtime.EncodeOrDie(codec, obj))))
+func objBody(obj runtime.Object) (io.ReadCloser, error) {
+	encoded, err := runtime.Encode(encoder, obj)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader([]byte(encoded))), nil
 }
 
-func objsBody(objs []*runtime.Object) io.Reader {
+func objsBody(objs []*runtime.Object) (io.Reader, error) {
 	var readers []io.Reader
 	for _, obj := range objs {
-		reader := bytes.NewReader([]byte(runtime.EncodeOrDie(codec, *obj)))
+		encoded, err := runtime.Encode(encoder, *obj)
+		if err != nil {
+			return nil, err
+		}
+		reader := bytes.NewReader([]byte(encoded))
 		readers = append(readers, reader)
 	}
-	return io.MultiReader(readers...)
+	return io.MultiReader(readers...), nil
 }
 
 func (o *EditOptions) extractManagedFields(obj runtime.Object) error {

@@ -49,8 +49,9 @@ func NewRootCmd(ioStreams genericclioptions.IOStreams) *cobra.Command {
 		},
 	}
 
-	rootCmd.Flags().BoolVarP(&o.DuplicateOptions.DuplicatePod, "pod", "p", false, "Duplicate pod of resource, currently only applies for: 'StatefulSet','Deployment','CronJob','Job'")
+	rootCmd.Flags().BoolVarP(&o.DuplicateOptions.DuplicateInnerPod, "pod", "p", false, "Duplicate pod of resource, currently only applies for: 'StatefulSet','Deployment','CronJob','Job'")
 	rootCmd.Flags().BoolVarP(&o.DuplicateOptions.DisableProbes, "disable-probes", "d", true, "Disable Readiness and liveness probes for duplicated pods only (requires '-p' for complex resources)")
+	rootCmd.Flags().BoolVarP(&o.DuplicateOptions.LoopCommand, "command-loop", "l", false, "Changes running command to an infinite loop (currently : \"tail -f /dev/null\"")
 	rootCmd.Flags().BoolVarP(&o.SkipEdit, "skip-edit", "k", false, "Skip editing duplicated resource before creation")
 	rootCmd.Flags().BoolVar(&o.WindowsLineEndings, "windows-line-endings", o.WindowsLineEndings,
 		"Defaults to the line ending native to your platform.")

@@ -1,53 +1,47 @@
 package duplicate
 
 import (
-	"fmt"
-
 	duputil "dup/pkg/util"
+	"fmt"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/cli-runtime/pkg/resource"
 )
 
-type DupPodSpec struct {
-	Name    string
-	Spec    *corev1.PodSpec
-	Labels  map[string]string
-	Options *DupPodOptions
+const LOOP_COMMAND = "tail -f /dev/null"
+
+type PodOptions struct {
+	DuplicateInnerPod bool
+	DisableProbes     bool
+	LoopCommand       bool
+	Image             string
 }
 
-type DupPodOptions struct {
-	DuplicatePod  bool
-	DisableProbes bool
-	Image         string
-	Command       string
-}
-
-func Clone(opts *DupPodOptions, objects []*resource.Info) ([]*runtime.Object, error) {
+func Clone(opts *PodOptions, objects []*resource.Info) ([]*runtime.Object, error) {
 	var ret []*runtime.Object
 	for i := range objects {
 		obj := objects[i]
 		objKind := obj.Object.GetObjectKind().GroupVersionKind().Kind
-		if opts.DuplicatePod && hasPodSpec(objKind) {
-			dupPodSpec, err := generateDupPodSpec(obj)
+		if hasPodSpec(objKind) {
+			dResource, err := cloneResourceWithPod(obj.Object, opts)
 			if err != nil {
 				return nil, err
 			}
-			dupPodSpec.Options = opts
-			dupPod := applyDupPodSpec(dupPodSpec)
-			ret = append(ret, &dupPod)
-			continue
+			ret = append(ret, dResource)
+		} else {
+			dResource, err := cloneGenericResource(obj.Object)
+			if err != nil {
+				return nil, err
+			}
+			ret = append(ret, dResource)
 		}
-		clonedResource, err := cloneResource(obj.Object)
-		if err != nil {
-			return nil, err
-		}
-		ret = append(ret, &clonedResource)
 	}
 	return ret, nil
 }
@@ -72,93 +66,98 @@ func unstructuredToType(in runtime.Object, out runtime.Object) error {
 	return nil
 }
 
-func generateDupPodSpec(obj *resource.Info) (DupPodSpec, error) {
-	objType := obj.Object.GetObjectKind().GroupVersionKind().Kind
+func cloneResourceWithPod(obj runtime.Object, opts *PodOptions) (*runtime.Object, error) {
+	var dupObject runtime.Object
+	var metadata *metav1.ObjectMeta
+	var spec *corev1.PodSpec
+	objType := obj.GetObjectKind().GroupVersionKind().Kind
 	switch objType {
 	case "StatefulSet":
-		sts := &appsv1.StatefulSet{}
-		unstructuredToType(obj.Object, sts)
-		return DupPodSpec{
-			Name:   duputil.GenerateResourceName(sts.Name),
-			Spec:   &sts.Spec.Template.Spec,
-			Labels: DeepCopyLabels(sts.Spec.Template.GetLabels()),
-		}, nil
+		dupObject = &appsv1.StatefulSet{}
+		unstructuredToType(obj, dupObject)
+		metadata, spec = extractPod[StatefulSetAdapter](StatefulSetAdapter{dupObject.(*appsv1.StatefulSet)})
 	case "Deployment":
-		deploy := &appsv1.Deployment{}
-		unstructuredToType(obj.Object, deploy)
-		return DupPodSpec{
-			Name:   duputil.GenerateResourceName(deploy.Name),
-			Spec:   &deploy.Spec.Template.Spec,
-			Labels: DeepCopyLabels(deploy.Spec.Template.GetLabels()),
-		}, nil
+		dupObject = &appsv1.Deployment{}
+		unstructuredToType(obj, dupObject)
+		metadata, spec = extractPod[DeploymentAdapter](DeploymentAdapter{dupObject.(*appsv1.Deployment)})
 	case "CronJob":
-		cron := &batchv1.CronJob{}
-		unstructuredToType(obj.Object, cron)
-		return DupPodSpec{
-			Name:   duputil.GenerateResourceName(cron.Name),
-			Spec:   &cron.Spec.JobTemplate.Spec.Template.Spec,
-			Labels: DeepCopyLabels(cron.Spec.JobTemplate.Spec.Template.GetLabels()),
-		}, nil
+		dupObject = &batchv1.CronJob{}
+		unstructuredToType(obj, dupObject)
+		metadata, spec = extractPod[CronJobAdapter](CronJobAdapter{dupObject.(*batchv1.CronJob)})
 	case "Job":
-		job := &batchv1.Job{}
-		unstructuredToType(obj.Object, job)
-		return DupPodSpec{
-			Name:   duputil.GenerateResourceName(job.Name),
-			Spec:   &job.Spec.Template.Spec,
-			Labels: DeepCopyLabels(job.Spec.Template.GetLabels()),
-		}, nil
+		dupObject = &batchv1.Job{}
+		unstructuredToType(obj, dupObject)
+		metadata, spec = extractPod[JobAdapter](JobAdapter{dupObject.(*batchv1.Job)})
 	case "Pod":
-		pod := &corev1.Pod{}
-		unstructuredToType(obj.Object, pod)
-		return DupPodSpec{
-			Name:   duputil.GenerateResourceName(pod.Name),
-			Spec:   &pod.Spec,
-			Labels: DeepCopyLabels(pod.ObjectMeta.GetLabels()),
-		}, nil
+		dupObject = &corev1.Pod{}
+		unstructuredToType(obj, dupObject)
+		metadata, spec = extractPod[PodAdapter](PodAdapter{dupObject.(*corev1.Pod)})
 	default:
-		return DupPodSpec{}, fmt.Errorf("object type %s does not have PodSpec or is not supported", objType)
+		return nil, fmt.Errorf("object type %s does not have PodSpec or is not supported", objType)
 	}
-}
 
-func DeepCopyLabels(labels map[string]string) map[string]string {
-	labelMap := make(map[string]string)
-
-	for key, value := range labels {
-		labelMap[key] = value
-	}
-	return labelMap
-}
-
-func cloneResource(obj runtime.Object) (runtime.Object, error) {
-	objCopy := obj.DeepCopyObject()
-	accessor := meta.NewAccessor()
-	name, err := accessor.Name(objCopy)
+	applyOptions(objType, spec, metadata, opts)
+	err := setSuffixedName(&dupObject)
 	if err != nil {
 		return nil, err
 	}
-	suffixedName := duputil.GenerateResourceName(name)
-	accessor.SetName(objCopy, suffixedName)
-
-	return objCopy, nil
+	return &dupObject, nil
 }
-func applyDupPodSpec(pod DupPodSpec) runtime.Object {
-	var clonedPod corev1.Pod
 
-	pod.Spec.DeepCopyInto(&clonedPod.Spec)
-	clonedPod.ObjectMeta.Labels = pod.Labels
-	clonedPod.Name = pod.Name
+func setSuffixedName(obj *runtime.Object) error {
+	accessor := meta.NewAccessor()
+	name, err := accessor.Name(*obj)
+	if err != nil {
+		return err
+	}
+	suffixedName := duputil.GenerateResourceName(name)
+	accessor.SetName(*obj, suffixedName)
+	return nil
+}
 
-	if pod.Options != nil && pod.Options.DisableProbes {
-		disableProbes(&clonedPod)
+func cloneGenericResource(obj runtime.Object) (*runtime.Object, error) {
+	objCopy := obj.DeepCopyObject()
+	err := setSuffixedName(&objCopy)
+	if err != nil {
+		return nil, err
 	}
 
-	return &clonedPod
+	return &objCopy, nil
+}
+func applyOptions(kind string, spec *corev1.PodSpec, meta *metav1.ObjectMeta, opts *PodOptions) {
+	if opts != nil {
+		if opts.DisableProbes {
+			disableProbes(spec)
+		}
+		if opts.LoopCommand {
+			setCommand(spec)
+		}
+		if kind == "Pod" {
+			removeOwnership(meta)
+		}
+	}
 }
 
-func disableProbes(pod *corev1.Pod) {
-	containers := pod.Spec.Containers
+func disableProbes(podSpec *corev1.PodSpec) {
+	containers := podSpec.Containers
 	for i := range containers {
 		containers[i].ReadinessProbe = nil
 		containers[i].LivenessProbe = nil
 	}
+}
+
+func setCommand(podSpec *corev1.PodSpec) {
+	command := strings.Split(LOOP_COMMAND, " ")
+	containers := podSpec.Containers
+	for i := range containers {
+		containers[i].Command = command
+	}
+}
+
+func removeOwnership(metadata *metav1.ObjectMeta) {
+	delete(metadata.Labels, "app.kubernetes.io/instance")
+	delete(metadata.Labels, "app.kubernetes.io/name")
+	metadata.OwnerReferences = nil
+	metadata.UID = ""
+	metadata.ResourceVersion = ""
 }
