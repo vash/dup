@@ -5,7 +5,7 @@ metadata:
 spec:
   version: {{ .TagName }}
   homepage: https://github.com/vash/dup
-  shortDescription: Duplicate all existing Kubernetes resources
+  shortDescription: Duplicate existing Kubernetes resources
   description: |
     This plugin is designed for on-the-fly duplication of Kubernetes resources.
     It focuses on providing a convenient way to edit resources before duplication,
